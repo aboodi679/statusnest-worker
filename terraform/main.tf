@@ -24,9 +24,7 @@ variable "environment" {
 }
 
 variable "database_url_secret_arn" {
-  description = "ARN of the DATABASE_URL secret"
-  type        = string
-  default     = "arn:aws:secretsmanager:us-east-1:026243800492:secret:statusnest-dev-database-url-75QRll"
+  default = "arn:aws:secretsmanager:us-east-1:026243800492:secret:statusnest-dev-database-url-75QRll"
 }
 
 variable "vpc_id" {
@@ -37,7 +35,11 @@ variable "private_subnet_ids" {
   default = ["subnet-072b96143bbd37ed7", "subnet-059242e11ee727d9e"]
 }
 
-# Security group for Lambda — allows outbound to RDS and internet
+variable "redis_host" {
+  default = "statusnest-dev-redis.b8x2ra.0001.use1.cache.amazonaws.com"
+}
+
+# ── Security Group ────────────────────────────────────────────────
 resource "aws_security_group" "monitor_lambda" {
   name        = "statusnest-${var.environment}-monitor-lambda-sg"
   description = "Security group for monitor Lambda"
@@ -53,7 +55,7 @@ resource "aws_security_group" "monitor_lambda" {
   tags = { Environment = var.environment }
 }
 
-# SQS Queue + DLQ
+# ── SQS ──────────────────────────────────────────────────────────
 resource "aws_sqs_queue" "dlq" {
   name                      = "statusnest-${var.environment}-monitor-dlq"
   message_retention_seconds = 1209600
@@ -71,7 +73,7 @@ resource "aws_sqs_queue" "monitor" {
   tags = { Environment = var.environment }
 }
 
-# IAM Role for Lambda
+# ── IAM ──────────────────────────────────────────────────────────
 resource "aws_iam_role" "monitor_lambda" {
   name = "statusnest-${var.environment}-monitor-lambda-role"
   assume_role_policy = jsonencode({
@@ -108,29 +110,39 @@ resource "aws_iam_role_policy" "monitor_lambda_policy" {
       },
       {
         Effect   = "Allow"
+        Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
+        Resource = aws_sqs_queue.monitor.arn
+      },
+      {
+        Effect   = "Allow"
         Action   = ["secretsmanager:GetSecretValue"]
         Resource = var.database_url_secret_arn
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["sns:Publish"]
+        Resource = "*"
       }
     ]
   })
 }
 
-# Lambda function
-data "archive_file" "monitor" {
-  type        = "zip"
-  source_dir  = "${path.module}/../package"
-  output_path = "${path.module}/monitor.zip"
+# ── Lambda Layer (shared deps) ────────────────────────────────────
+locals {
+  layer_arn = "arn:aws:lambda:us-east-1:026243800492:layer:statusnest-dev-worker-deps:1"
 }
 
+# ── Monitor Lambda ────────────────────────────────────────────────
 resource "aws_lambda_function" "monitor" {
-  filename         = data.archive_file.monitor.output_path
-  source_code_hash = data.archive_file.monitor.output_base64sha256
+  filename         = "${path.module}/../monitor-handler.zip"
+  source_code_hash = filebase64sha256("${path.module}/../monitor-handler.zip")
   function_name    = "statusnest-${var.environment}-monitor"
   role             = aws_iam_role.monitor_lambda.arn
   handler          = "monitor.handler"
   runtime          = "python3.11"
   timeout          = 60
   memory_size      = 256
+ layers = [local.layer_arn]
 
   vpc_config {
     subnet_ids         = var.private_subnet_ids
@@ -152,7 +164,7 @@ resource "aws_lambda_function_event_invoke_config" "monitor" {
   maximum_retry_attempts = 0
 }
 
-# EventBridge rule
+# ── EventBridge ───────────────────────────────────────────────────
 resource "aws_cloudwatch_event_rule" "every_minute" {
   name                = "statusnest-${var.environment}-monitor-every-minute"
   schedule_expression = "rate(1 minute)"
@@ -173,7 +185,44 @@ resource "aws_lambda_permission" "eventbridge" {
   source_arn    = aws_cloudwatch_event_rule.every_minute.arn
 }
 
-# Outputs
+# ── Processor Lambda ──────────────────────────────────────────────
+resource "aws_lambda_function" "processor" {
+  filename         = "${path.module}/../processor-handler.zip"
+  source_code_hash = filebase64sha256("${path.module}/../processor-handler.zip")
+  function_name    = "statusnest-${var.environment}-processor"
+  role             = aws_iam_role.monitor_lambda.arn
+  handler          = "processor.lambda_handler"
+  runtime          = "python3.11"
+  timeout          = 60
+  memory_size      = 256
+ layers = [local.layer_arn]
+
+  vpc_config {
+    subnet_ids         = var.private_subnet_ids
+    security_group_ids = [aws_security_group.monitor_lambda.id]
+  }
+
+  environment {
+    variables = {
+      DATABASE_URL_SECRET_ARN = var.database_url_secret_arn
+      REDIS_HOST              = var.redis_host
+      REDIS_PORT              = "6379"
+      SNS_TOPIC_ARN           = ""
+    }
+  }
+
+  tags = { Environment = var.environment }
+}
+
+resource "aws_lambda_event_source_mapping" "processor_sqs" {
+  event_source_arn                   = aws_sqs_queue.monitor.arn
+  function_name                      = aws_lambda_function.processor.arn
+  batch_size                         = 5
+  maximum_batching_window_in_seconds = 10
+  enabled                            = true
+}
+
+# ── Outputs ───────────────────────────────────────────────────────
 output "sqs_queue_url" {
   value = aws_sqs_queue.monitor.url
 }
@@ -188,4 +237,12 @@ output "dlq_arn" {
 
 output "lambda_function_name" {
   value = aws_lambda_function.monitor.function_name
+}
+
+output "processor_function_name" {
+  value = aws_lambda_function.processor.function_name
+}
+
+output "layer_arn" {
+  value = local.layer_arn
 }

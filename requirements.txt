@@ -1,3 +1,4 @@
 ﻿aiohttp==3.9.5
-sqlalchemy==2.0.30
-psycopg2-binary==2.9.9
+asyncpg==0.29.0
+redis==5.0.4
+aioboto3==12.4.0
