@@ -4,6 +4,11 @@ Serverless monitoring engine for StatusNest. Two AWS Lambda functions that toget
 
 ---
 
+<img width="1568" height="232" alt="image" src="https://github.com/user-attachments/assets/1797ac0b-bdfe-4f7c-b47a-d7be943763ca" />
+
+<img width="1555" height="340" alt="image" src="https://github.com/user-attachments/assets/4eaeb7dc-64d2-47ed-860e-94d10ea0687a" />
+
+
 ## Architecture
 
 ```
