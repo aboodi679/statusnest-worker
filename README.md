@@ -61,9 +61,9 @@ EventBridge (every 60s)
 ## Environment Variables
 
 ```
-DATABASE_URL      postgresql://user:pass@host:5432/statusnest
-REDIS_URL         redis://host:6379
-SQS_QUEUE_URL     https://sqs.us-east-1.amazonaws.com/026243800492/statusnest-dev-queue
+DATABASE_URL     ---
+REDIS_URL        ---
+SQS_QUEUE_URL     ---
 ```
 
 ---
